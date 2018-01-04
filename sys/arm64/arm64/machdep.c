@@ -1102,6 +1102,7 @@ initarm(struct arm64_bootparams *abp)
 		    kern_getenv("kern.cfg.order"));
 
 	init_proc0(abp->kern_stack);
+ thread0.td_proc->p_md.md_l0addr = abp->kern_l0pt - abp->kern_delta;
 	msgbufinit(msgbufp, msgbufsize);
 	mutex_init();
 	init_param2(physmem);
@@ -1229,4 +1230,25 @@ DB_SHOW_COMMAND(vtop, db_show_vtop)
 	} else
 		db_printf("show vtop <virt_addr>\n");
 }
+#endif
+
+/*
+ * Early putc routine for EARLY_PRINTF support.  To use, add to kernel config:
+ *   option SOCDEV_PA=0x70000000
+ *   option SOCDEV_VA=0x70000000
+ *   option EARLY_PRINTF
+ */
+#ifdef EARLY_PRINTF
+static void
+tegra124_early_putc(int c)
+{
+
+      volatile uint32_t * UART_STAT_REG = (uint32_t *)(0x70006014);
+      volatile uint32_t * UART_TX_REG   = (uint32_t *)(0x70006000);
+      const uint32_t      UART_TXRDY    = (1 << 6);
+      while ((*UART_STAT_REG & UART_TXRDY) == 0)
+            continue;
+      *UART_TX_REG = c;
+}
+early_putc_t *early_putc = tegra124_early_putc;
 #endif
