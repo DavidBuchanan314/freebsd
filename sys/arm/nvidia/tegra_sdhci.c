@@ -95,6 +95,7 @@ __FBSDID("$FreeBSD$");
 /* Compatible devices. */
 static struct ofw_compat_data compat_data[] = {
 	{"nvidia,tegra124-sdhci",	1},
+	{"nvidia,tegra210-sdhci",	1},
 	{NULL,				0},
 };
 
@@ -242,15 +243,12 @@ tegra_sdhci_probe(device_t dev)
 	if (!ofw_bus_status_okay(dev))
 		return (ENXIO);
 
-	if (ofw_bus_is_compatible(dev, "nvidia,tegra124-sdhci")) {
-		device_set_desc(dev, "Tegra SDHCI controller");
-	} else
-		return (ENXIO);
 	cd = ofw_bus_search_compatible(dev, compat_data);
 	if (cd->ocd_data == 0)
 		return (ENXIO);
 
 	node = ofw_bus_get_node(dev);
+	device_set_desc(dev, "Tegra SDHCI controller");
 
 	/* Allow dts to patch quirks, slots, and max-frequency. */
 	if ((OF_getencprop(node, "quirks", &cid, sizeof(cid))) > 0)
@@ -331,7 +329,7 @@ tegra_sdhci_attach(device_t dev)
 		goto fail;
 	}
 	if (bootverbose)
-		device_printf(dev, " Base MMC clock: %lld\n", freq);
+		device_printf(dev, " Base MMC clock: %jd\n", (uintmax_t)freq);
 
 	/* Fill slot information. */
 	sc->max_clk = (int)freq;

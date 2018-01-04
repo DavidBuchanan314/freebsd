@@ -40,7 +40,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 
 #include <machine/bus.h>
-#include <machine/fdt.h>
 
 #include <dev/extres/clk/clk.h>
 #include <dev/extres/hwreset/hwreset.h>
@@ -295,6 +294,7 @@ struct usbphy_softc {
 };
 
 static struct ofw_compat_data compat_data[] = {
+	{"nvidia,tegra210-usb-phy",	1},
 	{"nvidia,tegra30-usb-phy",	1},
 	{NULL,				0},
 };

@@ -205,6 +205,7 @@ __FBSDID("$FreeBSD$");
 
 static struct ofw_compat_data compat_data[] = {
 	{"nvidia,tegra124-i2c",	1},
+	{"nvidia,tegra210-i2c",	1},
 	{NULL,			0}
 };
 enum tegra_i2c_xfer_type {

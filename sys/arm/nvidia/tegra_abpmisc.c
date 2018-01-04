@@ -64,6 +64,7 @@ __FBSDID("$FreeBSD$");
 
 static struct ofw_compat_data compat_data[] = {
 	{"nvidia,tegra124-apbmisc",	1},
+	{"nvidia,tegra210-apbmisc",	1},
 	{NULL,				0}
 };
 
