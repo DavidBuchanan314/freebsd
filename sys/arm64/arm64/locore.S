@@ -214,6 +214,57 @@ ENTRY(mpentry)
 	br	x15
 
 mp_virtdone:
+	/* Verify if x0 is real context_id from PSCI */
+	/* Get masked MPIDR */
+	mrs	x9, mpidr_el1
+	ldr	x10, =0xff00ffffff
+	and	x9, x9, x10
+
+	/* Read mp_maxid */
+	ldr 	x8, =mp_maxid
+	ldr	w8, [x8]
+
+	/* Get address of cpu_mpidrs */
+	ldr	x7, =cpu_mpidrs
+
+	/*
+	 * At this point:
+	 *  x0 = context_id from PSCI
+	 *  x7 = address of cpu_mpidrs[]
+	 *  x8 = mp_maxid
+	 *  x9 = masked MPIDR
+	 */
+
+	/* Check validity of context_id */
+	/* If context_id <= mp_maxid  then is invalid */
+	cmp	x0, x8
+	b.hi	invalid_id
+
+	/* If (cpu_mpidrs[context_id] == mpidr) then is valid */
+	ldr	x10, [x7, x0, lsl #3]
+	cmp	x10, x9
+	b.eq	valid_id
+
+invalid_id:
+	/* Search cpu_mpidr table */
+	mov	x0, xzr
+1:
+	/* Compare MPIDR */
+	ldr	x10, [x7, x0, lsl #3]
+	cmp	x10, x9
+	b.eq	valid_id
+	add	x0, x0, #0x1
+	cmp	x0, x8
+	b.ls	1b
+
+	/*
+	 * We not found MPIDR for this core in table and is to early for
+	 * panic(), use dead loop instead.
+	 */
+	adr	x0, Lnot_found_msg
+2:	b	2b
+
+valid_id:
 	ldr	x4, =secondary_stacks
 	mov	x5, #(PAGE_SIZE * KSTACK_PAGES)
 	mul	x5, x0, x5
@@ -221,6 +272,9 @@ mp_virtdone:
 
 	b	init_secondary
 END(mpentry)
+Lnot_found_msg:
+	 .asciz	"Current MPIDR is not in cpu_mpidrs table"
+	 .align 3
 #endif
 
 /*
