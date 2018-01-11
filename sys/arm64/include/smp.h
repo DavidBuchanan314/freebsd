@@ -51,5 +51,6 @@ void	ipi_selected(cpuset_t cpus, u_int ipi);
 
 /* global data in mp_machdep.c */
 extern struct pcb               stoppcbs[];
+extern uint64_t			cpu_mpidrs[];
 
 #endif /* !_MACHINE_SMP_H_ */

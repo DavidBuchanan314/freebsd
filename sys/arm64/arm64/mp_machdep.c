@@ -121,13 +121,11 @@ static void ipi_stop(void *);
 
 struct mtx ap_boot_mtx;
 struct pcb stoppcbs[MAXCPU];
+uint64_t cpu_mpidrs[MAXCPU];
 
-/*
- * Not all systems boot from the first CPU in the device tree. To work around
- * this we need to find which CPU we have booted from so when we later
- * enable the secondary CPUs we skip this one.
- */
-static int cpu0 = -1;
+#ifdef FDT
+static u_int fdt_cpuid;
+#endif
 
 void mpentry(unsigned long cpuid);
 void init_secondary(uint64_t);
@@ -375,33 +373,21 @@ cpu_mp_probe(void)
 }
 
 static bool
-start_cpu(u_int id, uint64_t target_cpu)
+start_cpu(u_int cpuid, uint64_t target_cpu)
 {
 	struct pcpu *pcpup;
 	vm_paddr_t pa;
-	u_int cpuid;
 	int err;
 
 	/* Check we are able to start this cpu */
-	if (id > mp_maxid)
+	if (cpuid > mp_maxid)
 		return (false);
 
-	KASSERT(id < MAXCPU, ("Too many CPUs"));
+	KASSERT(cpuid < MAXCPU, ("Too many CPUs"));
+	KASSERT(cpu_mpidrs[cpuid] != (target_cpu & CPU_AFF_MASK),
+	    ("Start_cpu() was called on the boot CPU"));
 
-	/* We are already running on cpu 0 */
-	if (id == cpu0)
-		return (true);
-
-	/*
-	 * Rotate the CPU IDs to put the boot CPU as CPU 0. We keep the other
-	 * CPUs ordered as the are likely grouped into clusters so it can be
-	 * useful to keep that property, e.g. for the GICv3 driver to send
-	 * an IPI to all CPUs in the cluster.
-	 */
-	cpuid = id;
-	if (cpuid < cpu0)
-		cpuid += mp_maxid + 1;
-	cpuid -= cpu0;
+	cpu_mpidrs[cpuid] = target_cpu & CPU_AFF_MASK;
 
 	pcpup = &__pcpu[cpuid];
 	pcpu_init(pcpup, cpuid, sizeof(struct pcpu));
@@ -421,7 +407,7 @@ start_cpu(u_int id, uint64_t target_cpu)
 		 */
 		KASSERT(err == PSCI_MISSING ||
 		    (mp_quirks & MP_QUIRK_CPULIST) == MP_QUIRK_CPULIST,
-		    ("Failed to start CPU %u (%lx)\n", id, target_cpu));
+		    ("Failed to start CPU %u (%lx)\n", cpuid, target_cpu));
 
 		pcpu_destroy(pcpup);
 		kmem_free((vm_offset_t)dpcpu[cpuid - 1], DPCPU_SIZE);
@@ -429,7 +415,7 @@ start_cpu(u_int id, uint64_t target_cpu)
 		mp_ncpus--;
 
 		/* Notify the user that the CPU failed to start */
-		printf("Failed to start CPU %u (%lx)\n", id, target_cpu);
+		printf("Failed to start CPU %u (%lx)\n", cpuid, target_cpu);
 	} else
 		CPU_SET(cpuid, &all_cpus);
 
@@ -449,6 +435,11 @@ madt_handler(ACPI_SUBTABLE_HEADER *entry, void *arg)
 		intr = (ACPI_MADT_GENERIC_INTERRUPT *)entry;
 		cpuid = arg;
 		id = *cpuid;
+
+		/* Skip boot CPU */
+		if (cpu_mpidrs[0] == (intr->ArmMpidr & CPU_AFF_MASK))
+			break;
+
 		start_cpu(id, intr->ArmMpidr);
 		__pcpu[id].pc_acpi_id = intr->Uid;
 		(*cpuid)++;
@@ -475,7 +466,7 @@ cpu_init_acpi(void)
 		return;
 	}
 
-	cpuid = 0;
+	cpuid = 1;
 	acpi_walk_subtables(madt + 1, (char *)madt + madt->Header.Length,
 	    madt_handler, &cpuid);
 
@@ -502,16 +493,20 @@ cpu_init_fdt(u_int id, phandle_t node, u_int addr_size, pcell_t *reg)
 		target_cpu |= reg[1];
 	}
 
-	if (!start_cpu(id, target_cpu))
+	if (cpu_mpidrs[0] == (target_cpu & CPU_AFF_MASK))
+		return (TRUE);
+
+	if (!start_cpu(fdt_cpuid, target_cpu))
 		return (FALSE);
+	fdt_cpuid++;
 
 	/* Try to read the numa node of this cpu */
 	if (vm_ndomains == 1 ||
 	    OF_getencprop(node, "numa-node-id", &domain, sizeof(domain)) <= 0)
 		domain = 0;
-	__pcpu[id].pc_domain = domain;
+	__pcpu[fdt_cpuid].pc_domain = domain;
 	if (domain < MAXMEMDOM)
-		CPU_SET(id, &cpuset_domain[domain]);
+		CPU_SET(fdt_cpuid, &cpuset_domain[domain]);
 
 	return (TRUE);
 }
@@ -523,18 +518,24 @@ cpu_mp_start(void)
 {
 #ifdef FDT
 	phandle_t node;
-	int i;
 #endif
+	int i;
 
 	mtx_init(&ap_boot_mtx, "ap boot", NULL, MTX_SPIN);
 
+
+	/* Initialize MPIDR table with impossible MPIDR. */
+	for (i = 0; i < MAXCPU; i++)
+		cpu_mpidrs[i] = ~0;
+
+	/* CPU 0 is always boot CPU. */
 	CPU_SET(0, &all_cpus);
+	cpu_mpidrs[0] = READ_SPECIALREG(mpidr_el1) & CPU_AFF_MASK;
 
 	switch(arm64_bus_method) {
 #ifdef DEV_ACPI
 	case ARM64_BUS_ACPI:
 		mp_quirks = MP_QUIRK_CPULIST;
-		KASSERT(cpu0 >= 0, ("Current CPU was not found"));
 		cpu_init_acpi();
 		break;
 #endif
@@ -547,7 +548,7 @@ cpu_mp_start(void)
 				mp_quirks = fdt_quirks[i].quirks;
 			}
 		}
-		KASSERT(cpu0 >= 0, ("Current CPU was not found"));
+		fdt_cpuid = 1;
 		ofw_cpu_early_foreach(cpu_init_fdt, true);
 		break;
 #endif
@@ -568,16 +569,10 @@ cpu_count_acpi_handler(ACPI_SUBTABLE_HEADER *entry, void *arg)
 {
 	ACPI_MADT_GENERIC_INTERRUPT *intr;
 	u_int *cores = arg;
-	uint64_t mpidr_reg;
 
 	switch(entry->Type) {
 	case ACPI_MADT_TYPE_GENERIC_INTERRUPT:
 		intr = (ACPI_MADT_GENERIC_INTERRUPT *)entry;
-		if (cpu0 < 0) {
-			mpidr_reg = READ_SPECIALREG(mpidr_el1);
-			if ((mpidr_reg & 0xff00fffffful) == intr->ArmMpidr)
-				cpu0 = *cores;
-		}
 		(*cores)++;
 		break;
 	default:
@@ -602,36 +597,13 @@ cpu_count_acpi(void)
 		return (0);
 	}
 
-	cores = 0;
+	cores = 1;
 	acpi_walk_subtables(madt + 1, (char *)madt + madt->Header.Length,
 	    cpu_count_acpi_handler, &cores);
 
 	acpi_unmap_table(madt);
 
 	return (cores);
-}
-#endif
-
-#ifdef FDT
-static boolean_t
-cpu_find_cpu0_fdt(u_int id, phandle_t node, u_int addr_size, pcell_t *reg)
-{
-	uint64_t mpidr_fdt, mpidr_reg;
-
-	if (cpu0 < 0) {
-		mpidr_fdt = reg[0];
-		if (addr_size == 2) {
-			mpidr_fdt <<= 32;
-			mpidr_fdt |= reg[1];
-		}
-
-		mpidr_reg = READ_SPECIALREG(mpidr_el1);
-
-		if ((mpidr_reg & 0xff00fffffful) == mpidr_fdt)
-			cpu0 = id;
-	}
-
-	return (TRUE);
 }
 #endif
 
@@ -659,7 +631,7 @@ cpu_mp_setmaxid(void)
 #endif
 #ifdef FDT
 	case ARM64_BUS_FDT:
-		cores = ofw_cpu_early_foreach(cpu_find_cpu0_fdt, false);
+		cores = ofw_cpu_early_foreach(NULL, false);
 		if (cores > 0) {
 			cores = MIN(cores, MAXCPU);
 			if (bootverbose)
