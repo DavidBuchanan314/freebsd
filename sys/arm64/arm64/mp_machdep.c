@@ -342,11 +342,13 @@ ipi_stop(void *dummy __unused)
 	CTR0(KTR_SMP, "IPI_STOP");
 
 	cpu = PCPU_GET(cpuid);
-	savectx(&stoppcbs[cpu]);
+printf("IPI: Stop CPU(%u)\n", cpu);
+//	savectx(&stoppcbs[cpu]);
 
 	/* Indicate we are stopped */
 	CPU_SET_ATOMIC(cpu, &stopped_cpus);
 
+printf("IPI: Wait(%u)\n", cpu);
 	/* Wait for restart */
 	while (!CPU_ISSET(cpu, &started_cpus))
 		cpu_spinwait();
