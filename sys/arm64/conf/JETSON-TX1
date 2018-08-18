@@ -176,6 +176,7 @@ device		cdce
 # USB ethernet support
 #device		smcphy
 #device		smsc
+device		ure
 
 # GPIO
 #device		aw_gpio		# Allwinner GPIO controller
